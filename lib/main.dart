@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'db_helper.dart';
 import 'ml_engine.dart';
@@ -264,42 +265,115 @@ class _PredictScreenState extends State<PredictScreen> {
   bool _isPredicting = false;
   List<Map<String, dynamic>> _history = [];
 
+  // Real-time suggestions
+  List<String> _suggestions = [];
+  Timer? _debounce;
+
+  // Typewriter effect
+  String _typedText = "";
+  Timer? _typewriterTimer;
+
   @override
   void initState() {
     super.initState();
     _refreshHistory();
+
+    // Listener for real-time autocomplete
+    _inputController.addListener(() {
+      if (_debounce?.isActive ?? false) _debounce!.cancel();
+      _debounce = Timer(const Duration(milliseconds: 300), () {
+        _updateSuggestions();
+      });
+    });
+  }
+
+  void _updateSuggestions() {
+    if (_inputController.text.trim().isEmpty) {
+      setState(() => _suggestions = []);
+      return;
+    }
+    var sugg = _mlEngine.getLiveSuggestions(_inputController.text);
+    setState(() => _suggestions = sugg);
+  }
+
+  void _applySuggestion(String word) {
+    String currentText = _inputController.text.trim();
+    if (currentText.isEmpty) {
+      _inputController.text = word;
+    } else {
+      _inputController.text = "$currentText $word";
+    }
+    _inputController.selection = TextSelection.fromPosition(TextPosition(offset: _inputController.text.length));
+    setState(() => _suggestions = []);
   }
 
   void _refreshHistory() async {
     final data = await _dbHelper.getPredictions();
     final trainData = await _dbHelper.getTrainingConfigs();
     _mlEngine.train(trainData);
-    setState(() => _history = data.reversed.toList()); // Reverse to show latest at top
+    setState(() => _history = data.reversed.toList());
   }
 
   void _runPrediction(bool generateSentence) async {
     if (_inputController.text.isEmpty) return;
 
+    _typewriterTimer?.cancel();
     setState(() {
       _isPredicting = true;
-      _resultOutput = "Applying Kneser-Ney Continuation...";
+      _typedText = "";
+      _resultOutput = "Processing...";
     });
 
-    Future.delayed(const Duration(milliseconds: 500), () async {
+    Future.delayed(const Duration(milliseconds: 400), () async {
       String result;
 
       if (generateSentence) {
-        var gen = _mlEngine.generateSentence(_inputController.text, 10);
-        result = gen['success'] ? "✨ Generated Sentence:\n\"${gen['generated']}\"" : gen['message'];
+        var gen = _mlEngine.generateSentence(_inputController.text, 15, temperature: 0.7);
+        if (gen['success']) {
+          result = "✨ Generated Text:";
+          _startTypewriter(gen['generated']);
+        } else {
+          result = gen['message'];
+        }
       } else {
         var pred = _mlEngine.predictNextWord(_inputController.text);
         result = pred['success'] ? "Context: ${pred['context']}\n\nNext Words:\n${pred['predictions']}" : pred['message'];
       }
 
-      await _dbHelper.insertPrediction(_inputController.text, result);
-      setState(() { _isPredicting = false; _resultOutput = result; });
+      await _dbHelper.insertPrediction(_inputController.text, generateSentence ? _typedText : result);
+      setState(() {
+        _isPredicting = false;
+        if (!generateSentence) _resultOutput = result;
+      });
       _refreshHistory();
     });
+  }
+
+  void _startTypewriter(String fullText) {
+    List<String> words = fullText.split(" ");
+    int i = 0;
+    _typedText = "";
+
+    _typewriterTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
+      if (i < words.length) {
+        setState(() {
+          _typedText += (i == 0 ? "" : " ") + words[i];
+        });
+        i++;
+      } else {
+        timer.cancel();
+        _dbHelper.insertPrediction(_inputController.text, _typedText);
+        _refreshHistory();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _typewriterTimer?.cancel();
+    _inputController.dispose();
+    super.dispose();
   }
 
   @override
@@ -330,6 +404,22 @@ class _PredictScreenState extends State<PredictScreen> {
                       fillColor: Colors.white.withValues(alpha: 0.05),
                     ),
                   ),
+                  // Live Suggestions Row
+                  if (_suggestions.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12.0),
+                      child: Wrap(
+                        spacing: 8,
+                        children: _suggestions.map((word) =>
+                            ActionChip(
+                              label: Text(word),
+                              backgroundColor: Colors.deepPurple.withValues(alpha: 0.3),
+                              labelStyle: const TextStyle(color: Colors.white),
+                              onPressed: () => _applySuggestion(word),
+                            )
+                        ).toList(),
+                      ),
+                    ),
                   const SizedBox(height: 20),
                   Row(
                     children: [
@@ -358,9 +448,12 @@ class _PredictScreenState extends State<PredictScreen> {
             const Text('Engine Output', style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2)),
             const SizedBox(height: 12),
             GlassPanel(
-              child: _isPredicting
+              child: _isPredicting && _typedText.isEmpty
                   ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
-                  : Text(_resultOutput, style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.9), height: 1.8, fontFamily: 'monospace')),
+                  : Text(
+                  _typedText.isNotEmpty ? "✨ Generated Text:\n$_typedText▮" : _resultOutput,
+                  style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.9), height: 1.8, fontFamily: 'monospace')
+              ),
             ),
 
             const SizedBox(height: 32),
