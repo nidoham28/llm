@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '2026 LLM Engine',
+      title: '2026 Deep Think AI',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.dark),
@@ -46,13 +46,14 @@ class _MainScreenState extends State<MainScreen> {
         indicatorColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.model_training_outlined), selectedIcon: Icon(Icons.model_training), label: 'Train AI'),
-          NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: 'Generate'),
+          NavigationDestination(icon: Icon(Icons.psychology_outlined), selectedIcon: Icon(Icons.psychology), label: 'Deep Think'),
         ],
       ),
     );
   }
 }
 
+// --- REUSABLE UI COMPONENTS ---
 class GlassPanel extends StatelessWidget {
   final Widget child;
   final double padding;
@@ -75,9 +76,10 @@ class GlassPanel extends StatelessWidget {
 
 class GradientButton extends StatelessWidget {
   final String label;
+  final IconData icon;
   final VoidCallback onPressed;
   final List<Color> colors;
-  const GradientButton({super.key, required this.label, required this.onPressed, this.colors = const [Colors.deepPurple, Colors.cyanAccent]});
+  const GradientButton({super.key, required this.label, required this.onPressed, required this.icon, this.colors = const [Colors.deepPurple, Colors.cyanAccent]});
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +96,16 @@ class GradientButton extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: onPressed,
-          child: Center(child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.1))),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Text(label, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1.1)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -204,6 +215,7 @@ class _TrainScreenState extends State<TrainScreen> {
                   const SizedBox(height: 20),
                   GradientButton(
                     label: _isTraining ? "MAPPING MATRICES..." : "TRAIN AI BRAIN",
+                    icon: Icons.model_training,
                     onPressed: _isTraining ? () {} : _startTraining,
                     colors: const [Colors.deepPurple, Colors.purpleAccent],
                   ),
@@ -261,7 +273,7 @@ class _PredictScreenState extends State<PredictScreen> {
   final DBHelper _dbHelper = DBHelper();
   final MLEngine _mlEngine = MLEngine();
 
-  String _resultOutput = "Type a word to predict or generate...";
+  String _resultOutput = "Type a word to predict or deep think...";
   bool _isPredicting = false;
   List<Map<String, dynamic>> _history = [];
 
@@ -321,16 +333,16 @@ class _PredictScreenState extends State<PredictScreen> {
     setState(() {
       _isPredicting = true;
       _typedText = "";
-      _resultOutput = "Processing...";
+      _resultOutput = generateSentence ? "🧠 Deep Thinking (Beam Search)..." : "Calculating Kneser-Ney...";
     });
 
-    Future.delayed(const Duration(milliseconds: 400), () async {
+    Future.delayed(const Duration(milliseconds: 500), () async {
       String result;
 
       if (generateSentence) {
         var gen = _mlEngine.generateSentence(_inputController.text, 15, temperature: 0.7);
         if (gen['success']) {
-          result = "✨ Generated Text:";
+          result = "✨ Deep Think Generated Text:";
           _startTypewriter(gen['generated']);
         } else {
           result = gen['message'];
@@ -354,7 +366,7 @@ class _PredictScreenState extends State<PredictScreen> {
     int i = 0;
     _typedText = "";
 
-    _typewriterTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
+    _typewriterTimer = Timer.periodic(const Duration(milliseconds: 120), (timer) {
       if (i < words.length) {
         setState(() {
           _typedText += (i == 0 ? "" : " ") + words[i];
@@ -384,9 +396,9 @@ class _PredictScreenState extends State<PredictScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('AI Inference Engine', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
+            const Text('Deep Think Engine', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
             const SizedBox(height: 8),
-            Text('Predict next words or generate a full sentence.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
+            Text('Predict next words or let AI generate sentence.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
             const SizedBox(height: 32),
 
             GlassPanel(
@@ -426,6 +438,7 @@ class _PredictScreenState extends State<PredictScreen> {
                       Expanded(
                         child: GradientButton(
                           label: "NEXT WORD",
+                          icon: Icons.arrow_forward,
                           onPressed: _isPredicting ? () {} : () => _runPrediction(false),
                           colors: const [Colors.blueGrey, Colors.lightBlueAccent],
                         ),
@@ -433,7 +446,8 @@ class _PredictScreenState extends State<PredictScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: GradientButton(
-                          label: "GENERATE",
+                          label: "DEEP THINK",
+                          icon: Icons.psychology,
                           onPressed: _isPredicting ? () {} : () => _runPrediction(true),
                           colors: const [Colors.deepPurple, Colors.cyanAccent],
                         ),
@@ -451,7 +465,7 @@ class _PredictScreenState extends State<PredictScreen> {
               child: _isPredicting && _typedText.isEmpty
                   ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
                   : Text(
-                  _typedText.isNotEmpty ? "✨ Generated Text:\n$_typedText▮" : _resultOutput,
+                  _typedText.isNotEmpty ? "✨ Deep Think Generated:\n$_typedText▮" : _resultOutput,
                   style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.9), height: 1.8, fontFamily: 'monospace')
               ),
             ),
