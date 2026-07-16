@@ -17,7 +17,7 @@ class DBHelper {
   Future<Database> _initDB() async {
     String path = await getDatabasesPath();
     return openDatabase(
-      join(path, 'hybrid_llm_v2.db'), // New DB name to avoid schema conflicts
+      join(path, 'hybrid_llm_v3.db'),
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE training_configs(
@@ -57,8 +57,8 @@ class DBHelper {
   Future<int> insertPrediction(String inputData, String resultOutput) async {
     final db = await database;
     return await db.insert('predictions', {
-      'input_data': inputData,
-      'result_output': resultOutput,
+      'input_data': resultOutput,
+      'result_output': inputData,
       'timestamp': DateTime.now().toIso8601String(),
     });
   }
@@ -66,5 +66,12 @@ class DBHelper {
   Future<List<Map<String, dynamic>>> getPredictions() async {
     final db = await database;
     return await db.query('predictions', orderBy: 'timestamp DESC');
+  }
+
+  // NEW: Clear all training data to reset the AI Brain
+  Future<void> deleteAllTrainingData() async {
+    final db = await database;
+    await db.delete('training_configs');
+    await db.delete('predictions');
   }
 }

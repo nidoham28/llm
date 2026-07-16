@@ -12,7 +12,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '5-Gram KN AI',
+      title: '2026 LLM Engine',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.dark),
@@ -45,7 +45,7 @@ class _MainScreenState extends State<MainScreen> {
         indicatorColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.model_training_outlined), selectedIcon: Icon(Icons.model_training), label: 'Train AI'),
-          NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: 'Predict Next'),
+          NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: 'Generate'),
         ],
       ),
     );
@@ -82,7 +82,7 @@ class GradientButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      height: 60,
+      height: 55,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         gradient: LinearGradient(colors: colors),
@@ -93,7 +93,7 @@ class GradientButton extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: onPressed,
-          child: Center(child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.1))),
+          child: Center(child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.1))),
         ),
       ),
     );
@@ -133,7 +133,6 @@ class _TrainScreenState extends State<TrainScreen> {
 
   void _startTraining() async {
     if (_inputController.text.isEmpty) return;
-
     setState(() => _isTraining = true);
 
     Future.delayed(const Duration(milliseconds: 500), () async {
@@ -144,6 +143,26 @@ class _TrainScreenState extends State<TrainScreen> {
     });
   }
 
+  void _clearBrain() async {
+    bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A24),
+        title: const Text("Clear AI Brain?", style: TextStyle(color: Colors.white)),
+        content: const Text("This will permanently delete all training data.", style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _dbHelper.deleteAllTrainingData();
+      _refreshHistory();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -152,9 +171,18 @@ class _TrainScreenState extends State<TrainScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Train 5-Gram KN AI', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Train AI Brain', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
+                IconButton(
+                  onPressed: _clearBrain,
+                  icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
+                )
+              ],
+            ),
             const SizedBox(height: 8),
-            Text('Feed text to build 5-gram matrices with Kneser-Ney smoothing.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
+            Text('Feed text to build 5-gram matrices.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
             const SizedBox(height: 32),
 
             GlassPanel(
@@ -174,7 +202,7 @@ class _TrainScreenState extends State<TrainScreen> {
                   ),
                   const SizedBox(height: 20),
                   GradientButton(
-                    label: _isTraining ? "SMOOTHING MATRICES..." : "TRAIN AI BRAIN",
+                    label: _isTraining ? "MAPPING MATRICES..." : "TRAIN AI BRAIN",
                     onPressed: _isTraining ? () {} : _startTraining,
                     colors: const [Colors.deepPurple, Colors.purpleAccent],
                   ),
@@ -220,7 +248,7 @@ class _TrainScreenState extends State<TrainScreen> {
   }
 }
 
-// --- PREDICT SCREEN ---
+// --- PREDICT / GENERATE SCREEN ---
 class PredictScreen extends StatefulWidget {
   const PredictScreen({super.key});
   @override
@@ -232,7 +260,7 @@ class _PredictScreenState extends State<PredictScreen> {
   final DBHelper _dbHelper = DBHelper();
   final MLEngine _mlEngine = MLEngine();
 
-  String _resultOutput = "Type a word to see AI next-word predictions...";
+  String _resultOutput = "Type a word to predict or generate...";
   bool _isPredicting = false;
   List<Map<String, dynamic>> _history = [];
 
@@ -246,33 +274,30 @@ class _PredictScreenState extends State<PredictScreen> {
     final data = await _dbHelper.getPredictions();
     final trainData = await _dbHelper.getTrainingConfigs();
     _mlEngine.train(trainData);
-    setState(() => _history = data);
+    setState(() => _history = data.reversed.toList()); // Reverse to show latest at top
   }
 
-  void _runPrediction() async {
+  void _runPrediction(bool generateSentence) async {
     if (_inputController.text.isEmpty) return;
 
     setState(() {
       _isPredicting = true;
-      _resultOutput = "Applying Kneser-Ney Continuation Probability...";
+      _resultOutput = "Applying Kneser-Ney Continuation...";
     });
 
     Future.delayed(const Duration(milliseconds: 500), () async {
-      var prediction = _mlEngine.predictNextWord(_inputController.text);
-
       String result;
-      if (prediction['success']) {
-        result = "Context: ${prediction['context']}\n\nPredictions:\n${prediction['predictions']}";
+
+      if (generateSentence) {
+        var gen = _mlEngine.generateSentence(_inputController.text, 10);
+        result = gen['success'] ? "✨ Generated Sentence:\n\"${gen['generated']}\"" : gen['message'];
       } else {
-        result = prediction['message'];
+        var pred = _mlEngine.predictNextWord(_inputController.text);
+        result = pred['success'] ? "Context: ${pred['context']}\n\nNext Words:\n${pred['predictions']}" : pred['message'];
       }
 
       await _dbHelper.insertPrediction(_inputController.text, result);
-
-      setState(() {
-        _isPredicting = false;
-        _resultOutput = result;
-      });
+      setState(() { _isPredicting = false; _resultOutput = result; });
       _refreshHistory();
     });
   }
@@ -285,9 +310,9 @@ class _PredictScreenState extends State<PredictScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('KN Next-Word Inference', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
+            const Text('AI Inference Engine', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white)),
             const SizedBox(height: 8),
-            Text('Type up to 4 words to trigger 5-gram predictions.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
+            Text('Predict next words or generate a full sentence.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
             const SizedBox(height: 32),
 
             GlassPanel(
@@ -296,7 +321,7 @@ class _PredictScreenState extends State<PredictScreen> {
                   TextField(
                     controller: _inputController,
                     style: const TextStyle(color: Colors.white),
-                    maxLines: 3,
+                    maxLines: 2,
                     decoration: InputDecoration(
                       labelText: 'Query (e.g. "I think that")',
                       labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
@@ -306,17 +331,31 @@ class _PredictScreenState extends State<PredictScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  GradientButton(
-                    label: _isPredicting ? "PREDICTING..." : "PREDICT NEXT WORD",
-                    onPressed: _isPredicting ? () {} : _runPrediction,
-                    colors: const [Colors.blueGrey, Colors.cyanAccent],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GradientButton(
+                          label: "NEXT WORD",
+                          onPressed: _isPredicting ? () {} : () => _runPrediction(false),
+                          colors: const [Colors.blueGrey, Colors.lightBlueAccent],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: GradientButton(
+                          label: "GENERATE",
+                          onPressed: _isPredicting ? () {} : () => _runPrediction(true),
+                          colors: const [Colors.deepPurple, Colors.cyanAccent],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 32),
 
-            const Text('Prediction Engine Output', style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2)),
+            const Text('Engine Output', style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2)),
             const SizedBox(height: 12),
             GlassPanel(
               child: _isPredicting
@@ -325,10 +364,10 @@ class _PredictScreenState extends State<PredictScreen> {
             ),
 
             const SizedBox(height: 32),
-            const Text('Prediction History', style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2)),
+            const Text('History', style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2)),
             const SizedBox(height: 12),
             _history.isEmpty
-                ? Text("No predictions yet.", style: TextStyle(color: Colors.white.withValues(alpha: 0.3)))
+                ? Text("No history yet.", style: TextStyle(color: Colors.white.withValues(alpha: 0.3)))
                 : Column(
               children: _history.map((item) => Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
@@ -337,9 +376,9 @@ class _PredictScreenState extends State<PredictScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("Query: ${item['input_data']}", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text("Input: ${item['result_output']}", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
-                      Text(item['result_output'], style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.6), fontSize: 12), maxLines: 5, overflow: TextOverflow.ellipsis),
+                      Text(item['input_data'], style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.6), fontSize: 12), maxLines: 3, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
@@ -350,4 +389,4 @@ class _PredictScreenState extends State<PredictScreen> {
       ),
     );
   }
-} 
+}
