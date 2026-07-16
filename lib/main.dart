@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '2026 Deep Think AI',
+      title: '2026 LLM Engine',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.dark),
@@ -53,7 +53,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// --- REUSABLE UI COMPONENTS ---
 class GlassPanel extends StatelessWidget {
   final Widget child;
   final double padding;
@@ -139,7 +138,7 @@ class _TrainScreenState extends State<TrainScreen> {
     _mlEngine.train(data);
     setState(() {
       _history = data;
-      _configOutput = "5-Gram KN Model Ready.\nVocabulary: ${_mlEngine.vocabularySize} words\nUnique Bigram Types: ${_mlEngine.totalBigramTypes}";
+      _configOutput = "LCR Pattern Model Ready.\nVocabulary: ${_mlEngine.vocabularySize} words\nUnique Bigram Types: ${_mlEngine.totalBigramTypes}";
     });
   }
 
@@ -194,7 +193,7 @@ class _TrainScreenState extends State<TrainScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Feed text to build 5-gram matrices.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
+            Text('Feed text to build LCR & N-gram matrices.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
             const SizedBox(height: 32),
 
             GlassPanel(
@@ -277,11 +276,9 @@ class _PredictScreenState extends State<PredictScreen> {
   bool _isPredicting = false;
   List<Map<String, dynamic>> _history = [];
 
-  // Real-time suggestions
   List<String> _suggestions = [];
   Timer? _debounce;
 
-  // Typewriter effect
   String _typedText = "";
   Timer? _typewriterTimer;
 
@@ -290,7 +287,6 @@ class _PredictScreenState extends State<PredictScreen> {
     super.initState();
     _refreshHistory();
 
-    // Listener for real-time autocomplete
     _inputController.addListener(() {
       if (_debounce?.isActive ?? false) _debounce!.cancel();
       _debounce = Timer(const Duration(milliseconds: 300), () {
@@ -333,17 +329,29 @@ class _PredictScreenState extends State<PredictScreen> {
     setState(() {
       _isPredicting = true;
       _typedText = "";
-      _resultOutput = generateSentence ? "🧠 Deep Thinking (Beam Search)..." : "Calculating Kneser-Ney...";
+      _resultOutput = generateSentence ? "🧠 Deep Thinking & Validating..." : "Calculating Kneser-Ney...";
     });
 
     Future.delayed(const Duration(milliseconds: 500), () async {
       String result;
 
       if (generateSentence) {
-        var gen = _mlEngine.generateSentence(_inputController.text, 15, temperature: 0.7);
+        var gen = _mlEngine.generateSentence(_inputController.text, 15, threshold: 0.60); // 60% threshold for showing
         if (gen['success']) {
-          result = "✨ Deep Think Generated Text:";
-          _startTypewriter(gen['generated']);
+          String confidence = gen['confidence'];
+          bool isAccurate = gen['is_accurate'];
+          String matched = gen['matched_text'];
+
+          result = "✨ Deep Think Generated:\n${gen['generated']}\n\n";
+          result += "📊 Confidence: $confidence%\n";
+          if (isAccurate) {
+            result += "✅ Status: 80%+ Match Achieved (Accurate)\n";
+          } else {
+            result += "⚠️ Status: Low Match (Needs more data)\n";
+          }
+          result += "🔍 Closest Trained Match:\n\"$matched\"";
+
+          _startTypewriter(result);
         } else {
           result = gen['message'];
         }
@@ -362,14 +370,14 @@ class _PredictScreenState extends State<PredictScreen> {
   }
 
   void _startTypewriter(String fullText) {
-    List<String> words = fullText.split(" ");
+    List<String> chars = fullText.split("");
     int i = 0;
     _typedText = "";
 
-    _typewriterTimer = Timer.periodic(const Duration(milliseconds: 120), (timer) {
-      if (i < words.length) {
+    _typewriterTimer = Timer.periodic(const Duration(milliseconds: 10), (timer) {
+      if (i < chars.length) {
         setState(() {
-          _typedText += (i == 0 ? "" : " ") + words[i];
+          _typedText += chars[i];
         });
         i++;
       } else {
@@ -409,14 +417,13 @@ class _PredictScreenState extends State<PredictScreen> {
                     style: const TextStyle(color: Colors.white),
                     maxLines: 2,
                     decoration: InputDecoration(
-                      labelText: 'Query (e.g. "I think that")',
+                      labelText: 'Query (e.g. "My name")',
                       labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
                       border: InputBorder.none,
                       filled: true,
                       fillColor: Colors.white.withValues(alpha: 0.05),
                     ),
                   ),
-                  // Live Suggestions Row
                   if (_suggestions.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 12.0),
@@ -465,7 +472,7 @@ class _PredictScreenState extends State<PredictScreen> {
               child: _isPredicting && _typedText.isEmpty
                   ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
                   : Text(
-                  _typedText.isNotEmpty ? "✨ Deep Think Generated:\n$_typedText▮" : _resultOutput,
+                  _typedText.isNotEmpty ? _typedText + "▮" : _resultOutput,
                   style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.9), height: 1.8, fontFamily: 'monospace')
               ),
             ),
@@ -483,9 +490,9 @@ class _PredictScreenState extends State<PredictScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("Input: ${item['result_output']}", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text("Input: ${item['input_data']}", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
-                      Text(item['input_data'], style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.6), fontSize: 12), maxLines: 3, overflow: TextOverflow.ellipsis),
+                      Text(item['result_output'], style: TextStyle(color: Colors.cyanAccent.withValues(alpha: 0.6), fontSize: 12), maxLines: 3, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),

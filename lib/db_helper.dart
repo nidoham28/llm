@@ -57,8 +57,8 @@ class DBHelper {
   Future<int> insertPrediction(String inputData, String resultOutput) async {
     final db = await database;
     return await db.insert('predictions', {
-      'input_data': resultOutput,
-      'result_output': inputData,
+      'input_data': inputData,
+      'result_output': resultOutput,
       'timestamp': DateTime.now().toIso8601String(),
     });
   }

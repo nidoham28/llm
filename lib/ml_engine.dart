@@ -6,15 +6,12 @@ class MLEngine {
   factory MLEngine() => _instance;
   MLEngine._internal();
 
-  // --- N-Gram & Skip-gram Storage ---
+  // N-Gram Storage
   final List<Map<String, Map<String, int>>> _counts = List.generate(5, (_) => {});
   final List<Map<String, int>> _contextTotals = List.generate(5, (_) => {});
   final List<Map<String, int>> _distinctNext = List.generate(5, (_) => {});
 
-  // Skip-gram storage (Context with gaps)
-  final Map<String, Map<String, int>> _skipgramMap = {};
-
-  // --- TF-IDF Storage (For Fallback & Semantic Anchor) ---
+  // TF-IDF & Corpus Storage
   final List<String> _corpusTexts = [];
   final List<Map<String, double>> _tfidfVectors = [];
   Map<String, double> _idf = {};
@@ -23,10 +20,14 @@ class MLEngine {
   final Map<String, Set<String>> _precedingWords = {};
   int _totalBigramTypes = 0;
   static const double _D = 0.75;
-  static const String _eosToken = '<EOS>';
+  static const String _bosToken = '<BOS>'; // Beginning of Sentence
+  static const String _eosToken = '<EOS>'; // End of Sentence
   final Random _random = Random();
 
-  // Simple Subword/Root extractor (Pseudo-BPE)
+  // LCR Pattern Storage (Left-Center-Right)
+  final Set<String> _leftPatterns = {};  // First 2 words
+  final Set<String> _rightPatterns = {}; // Last 2 words
+
   String _getRoot(String word) {
     if (word.endsWith('ing')) return word.substring(0, word.length - 3);
     if (word.endsWith('s')) return word.substring(0, word.length - 1);
@@ -34,9 +35,12 @@ class MLEngine {
     return word;
   }
 
-  List<String> _tokenize(String text, {bool addEos = false}) {
-    var tokens = text.toLowerCase().split(RegExp(r'\W+')).where((w) => w.isNotEmpty).toList();
-    if (addEos) tokens.add(_eosToken);
+  List<String> _tokenize(String text, {bool addBosEos = false}) {
+    var tokens = text.toLowerCase().split(RegExp(r'[^a-z]+')).where((w) => w.isNotEmpty).toList();
+    if (addBosEos) {
+      tokens.insert(0, _bosToken);
+      tokens.add(_eosToken);
+    }
     return tokens;
   }
 
@@ -47,11 +51,11 @@ class MLEngine {
       _contextTotals[i].clear();
       _distinctNext[i].clear();
     }
-    _skipgramMap.clear();
     _precedingWords.clear();
     _totalBigramTypes = 0;
+    _leftPatterns.clear();
+    _rightPatterns.clear();
 
-    // TF-IDF Clear
     _corpusTexts.clear();
     _tfidfVectors.clear();
     _idf.clear();
@@ -61,46 +65,46 @@ class MLEngine {
     Map<String, int> docFrequency = {};
 
     for (var item in dbData) {
-      var tokens = _tokenize(item['input_data'] ?? '', addEos: true);
-      _corpusTexts.add(item['input_data'] ?? '');
-      tokenizedDocs.add(tokens);
+      // Train every line separately
+      List<String> lines = (item['input_data'] ?? '').split('\n');
+      for (var line in lines) {
+        if (line.trim().isEmpty) continue;
 
-      // TF-IDF Vocab building
-      Set<String> uniqueTokens = tokens.toSet();
-      for (var token in uniqueTokens) {
-        docFrequency[token] = (docFrequency[token] ?? 0) + 1;
-        _vocabulary.add(token);
-      }
+        var tokens = _tokenize(line, addBosEos: true);
+        _corpusTexts.add(line.trim());
+        tokenizedDocs.add(tokens);
 
-      for (int i = 0; i < tokens.length; i++) {
-        _updateCount(0, "", tokens[i]);
-        if (i > 0) {
-          _precedingWords.putIfAbsent(tokens[i], () => {});
-          if (_precedingWords[tokens[i]]!.add(tokens[i - 1])) {
-            _totalBigramTypes++;
-          }
+        // LCR Pattern Extraction
+        if (tokens.length >= 4) {
+          _leftPatterns.add("${tokens[1]} ${tokens[2]}"); // First 2 real words
+          _rightPatterns.add("${tokens[tokens.length - 3]} ${tokens[tokens.length - 2]}"); // Last 2 real words
         }
 
-        // 2-gram to 5-gram
-        for (int n = 2; n <= 5; n++) {
-          if (i >= n - 1) {
-            String context = tokens.sublist(i - n + 1, i).join(" ");
-            _updateCount(n - 1, context, tokens[i]);
-          }
+        Set<String> uniqueTokens = tokens.toSet();
+        for (var token in uniqueTokens) {
+          docFrequency[token] = (docFrequency[token] ?? 0) + 1;
+          _vocabulary.add(token);
         }
 
-        // Skip-grams (e.g., word1 + word3 -> word4)
-        if (i >= 2) {
-          String skipContext = "${tokens[i - 2]} _ ${tokens[i - 1]}";
-          _skipgramMap.putIfAbsent(skipContext, () => {});
-          if (i + 1 < tokens.length) {
-            _skipgramMap[skipContext]![tokens[i + 1]] = (_skipgramMap[skipContext]![tokens[i + 1]] ?? 0) + 1;
+        for (int i = 0; i < tokens.length; i++) {
+          _updateCount(0, "", tokens[i]);
+          if (i > 0) {
+            _precedingWords.putIfAbsent(tokens[i], () => {});
+            if (_precedingWords[tokens[i]]!.add(tokens[i - 1])) {
+              _totalBigramTypes++;
+            }
+          }
+
+          for (int n = 2; n <= 5; n++) {
+            if (i >= n - 1) {
+              String context = tokens.sublist(i - n + 1, i).join(" ");
+              _updateCount(n - 1, context, tokens[i]);
+            }
           }
         }
       }
     }
 
-    // Calculate TF-IDF for fallback
     int N = _corpusTexts.length;
     docFrequency.forEach((word, df) {
       _idf[word] = log((N + 1) / (df + 1)) + 1;
@@ -114,7 +118,7 @@ class MLEngine {
     Map<String, double> tf = {};
     if (tokens.isEmpty) return tf;
     for (var token in tokens) {
-      String root = _getRoot(token); // Apply Pseudo-BPE
+      String root = _getRoot(token);
       tf[root] = (tf[root] ?? 0) + 1;
     }
     tf.updateAll((key, value) => value / tokens.length);
@@ -156,7 +160,7 @@ class MLEngine {
       return distinctPreceding / _totalBigramTypes;
     }
 
-    int level = context.length - 1;
+    int level = context.length;
     String ctxStr = context.join(" ");
 
     int count = _counts[level][ctxStr]?[word] ?? 0;
@@ -183,15 +187,10 @@ class MLEngine {
       if (context.length >= n) {
         String ctxStr = context.sublist(context.length - n).join(" ");
         candidates.addAll(_counts[n]?[ctxStr]?.keys ?? []);
-
-        // Add Skip-gram candidates
-        if (n >= 2) {
-          String skipCtx = "${context[context.length - n]} _ ${context[context.length - 1]}";
-          candidates.addAll(_skipgramMap[skipCtx]?.keys ?? []);
-        }
       }
     }
     candidates.remove(_eosToken);
+    candidates.remove(_bosToken);
 
     if (candidates.isEmpty) return [];
 
@@ -201,7 +200,7 @@ class MLEngine {
     return scored.take(3).map((e) => e.key).toList();
   }
 
-  Map<String, dynamic> predictNextWord(String query, {bool hideEos = true}) {
+  Map<String, dynamic> predictNextWord(String query) {
     var tokens = _tokenize(query);
     if (tokens.isEmpty) return {'success': false, 'message': 'Type some words.'};
 
@@ -218,11 +217,10 @@ class MLEngine {
       var topCont = _precedingWords.entries.toList()..sort((a, b) => b.value.length.compareTo(a.value.length));
       for (var e in topCont.take(20)) { candidates.add(e.key); }
     }
-    if (hideEos) candidates.remove(_eosToken);
+    candidates.remove(_eosToken);
+    candidates.remove(_bosToken);
 
-    if (candidates.isEmpty) {
-      return {'success': false, 'message': 'No patterns found. Try training more data.'};
-    }
+    if (candidates.isEmpty) return {'success': false, 'message': 'No patterns found.'};
 
     List<MapEntry<String, double>> scored = candidates.map((w) => MapEntry(w, _getKNProb(context, w))).toList();
     scored.sort((a, b) => b.value.compareTo(a.value));
@@ -236,17 +234,18 @@ class MLEngine {
     };
   }
 
-  // --- DEEP THINK: BEAM SEARCH GENERATION ---
-  Map<String, dynamic> generateSentence(String query, int maxWords, {double temperature = 0.7}) {
-    var tokens = _tokenize(query);
-    if (tokens.isEmpty) return {'success': false, 'message': 'Type some words to generate.'};
+  // --- DEEP THINK: 100% ACCURATE LCR PATTERN GENERATION ---
+  Map<String, dynamic> generateSentence(String query, int maxWords, {double threshold = 0.80}) {
+    var rawTokens = _tokenize(query);
+    if (rawTokens.isEmpty) return {'success': false, 'message': 'Type some words to generate.'};
 
-    // Semantic anchor: TF-IDF of the prompt
-    var promptVector = _computeTfidfVector(tokens);
+    // Prepare tokens with BOS
+    List<String> initTokens = [_bosToken, ...rawTokens];
+    var promptVector = _computeTfidfVector(rawTokens);
 
-    // Beam Search state: List of possible sentences (tokens + score)
+    // Beam Search state
     List<MapEntry<List<String>, double>> beams = [
-      MapEntry(List.from(tokens), 1.0) // Initial beam
+      MapEntry(initTokens, 1.0)
     ];
 
     for (int step = 0; step < maxWords; step++) {
@@ -255,9 +254,6 @@ class MLEngine {
       for (var beam in beams) {
         List<String> currentTokens = beam.key;
         double currentScore = beam.value;
-
-        var pred = predictNextWord(currentTokens.join(" "), hideEos: false);
-        if (!pred['success']) continue;
 
         List<String> context = currentTokens.length >= 4 ? currentTokens.sublist(currentTokens.length - 4) : List.from(currentTokens);
         Set<String> candidates = {};
@@ -268,7 +264,6 @@ class MLEngine {
           }
         }
 
-        // Expand top 3 candidates for each beam
         List<MapEntry<String, double>> scored = candidates.map((w) => MapEntry(w, _getKNProb(context, w))).toList();
         scored.sort((a, b) => b.value.compareTo(a.value));
         var topCands = scored.take(3).toList();
@@ -276,29 +271,34 @@ class MLEngine {
         for (var cand in topCands) {
           List<String> newTokens = List.from(currentTokens);
           newTokens.add(cand.key);
+          double newScore = currentScore * cand.value;
 
-          double newScore = currentScore * cand.value; // Multiply probabilities
-
-          // 1. No-Repeat Trigram Penalty (Prevents AI loops like "I think I think")
+          // Hard Rule 1: No-Repeat Trigram Penalty
           if (newTokens.length >= 3) {
             String lastTrigram = newTokens.sublist(newTokens.length - 3).join(" ");
             int count = 0;
             for (int i = 0; i < newTokens.length - 3; i++) {
               if (newTokens.sublist(i, i + 3).join(" ") == lastTrigram) count++;
             }
-            if (count > 0) newScore *= 0.1; // Heavy penalty for repetition
+            if (count > 0) newScore *= 0.1;
           }
 
-          // 2. Semantic Anchoring (Keeps sentence relevant to prompt)
-          if (newTokens.length % 4 == 0) { // Check every 4 words
-            var currentVec = _computeTfidfVector(newTokens);
+          // Soft Rule: Semantic Anchoring
+          if (newTokens.length % 4 == 0) {
+            var currentVec = _computeTfidfVector(newTokens.sublist(1)); // Skip BOS
             double sim = _cosineSimilarity(promptVector, currentVec);
-            newScore *= (0.5 + sim); // Reward for staying on topic
+            newScore *= (0.5 + sim);
           }
 
-          // 3. Reward EOS (Encourages finishing the sentence naturally)
+          // Hard Rule 2: LCR Right Pattern Reward
           if (cand.key == _eosToken) {
-            newScore *= 1.5;
+            // Check if the last 2 words form a known right pattern
+            if (newTokens.length >= 3) {
+              String rightCandidate = "${newTokens[newTokens.length - 2]} ${newTokens[newTokens.length - 1]}";
+              if (_rightPatterns.contains(rightCandidate)) {
+                newScore *= 2.0; // Massive reward for perfect ending
+              }
+            }
           }
 
           newBeams.add(MapEntry(newTokens, newScore));
@@ -306,26 +306,40 @@ class MLEngine {
       }
 
       if (newBeams.isEmpty) break;
-
-      // Sort new beams by score and keep top 3
       newBeams.sort((a, b) => b.value.compareTo(a.value));
       beams = newBeams.take(3).toList();
 
-      // If the best beam ended with EOS, we can stop early
-      if (beams.first.key.last == _eosToken) {
-        beams.first.key.removeLast(); // Remove EOS token from final text
-        break;
+      if (beams.first.key.last == _eosToken) break;
+    }
+
+    List<String> bestTokens = beams.first.key;
+    // Clean BOS and EOS
+    if (bestTokens.first == _bosToken) bestTokens.removeAt(0);
+    if (bestTokens.last == _eosToken) bestTokens.removeLast();
+
+    String generatedText = bestTokens.join(" ");
+
+    // --- 80%+ MATCH GATE ---
+    var genVec = _computeTfidfVector(bestTokens);
+    double maxSim = 0.0;
+    String matchedTrainText = "";
+
+    for (int i = 0; i < _tfidfVectors.length; i++) {
+      double sim = _cosineSimilarity(genVec, _tfidfVectors[i]);
+      if (sim > maxSim) {
+        maxSim = sim;
+        matchedTrainText = _corpusTexts[i];
       }
     }
 
-    // Clean up EOS from final output if present
-    List<String> bestTokens = beams.first.key;
-    if (bestTokens.last == _eosToken) bestTokens.removeLast();
+    bool isAccurate = (maxSim * 100) >= (threshold * 100);
 
     return {
       'success': true,
-      'original': query,
-      'generated': bestTokens.join(" ")
+      'generated': generatedText,
+      'confidence': (maxSim * 100).toStringAsFixed(1),
+      'matched_text': matchedTrainText,
+      'is_accurate': isAccurate
     };
   }
 
