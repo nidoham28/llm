@@ -138,7 +138,7 @@ class _TrainScreenState extends State<TrainScreen> {
     _mlEngine.train(data);
     setState(() {
       _history = data;
-      _configOutput = "LCR Pattern Model Ready.\nVocabulary: ${_mlEngine.vocabularySize} words\nUnique Bigram Types: ${_mlEngine.totalBigramTypes}";
+      _configOutput = "Pattern Model Ready.\nVocabulary: ${_mlEngine.vocabularySize} words\nUnique Patterns: ${_mlEngine.totalBigramTypes}";
     });
   }
 
@@ -193,7 +193,7 @@ class _TrainScreenState extends State<TrainScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Feed text to build LCR & N-gram matrices.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
+            Text('Feed text to build word pattern map.', style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 16)),
             const SizedBox(height: 32),
 
             GlassPanel(
@@ -329,27 +329,35 @@ class _PredictScreenState extends State<PredictScreen> {
     setState(() {
       _isPredicting = true;
       _typedText = "";
-      _resultOutput = generateSentence ? "🧠 Deep Thinking & Validating..." : "Calculating Kneser-Ney...";
+      _resultOutput = generateSentence ? "Matching pattern..." : "Finding next word...";
     });
 
     Future.delayed(const Duration(milliseconds: 500), () async {
       String result;
 
       if (generateSentence) {
-        var gen = _mlEngine.generateSentence(_inputController.text, 15, threshold: 0.60); // 60% threshold for showing
+        var gen = _mlEngine.generateSentence(_inputController.text, 15, threshold: 0.60);
         if (gen['success']) {
-          String confidence = gen['confidence'];
+          String inputMatch = gen['confidence'];
+          String outputMatch = gen['output_match'] ?? '0.0';
           bool isAccurate = gen['is_accurate'];
           String matched = gen['matched_text'];
+          List<dynamic> options = gen['options'] ?? [];
+          List<dynamic> optPcts = gen['options_match'] ?? [];
 
-          result = "✨ Deep Think Generated:\n${gen['generated']}\n\n";
-          result += "📊 Confidence: $confidence%\n";
-          if (isAccurate) {
-            result += "✅ Status: 80%+ Match Achieved (Accurate)\n";
-          } else {
-            result += "⚠️ Status: Low Match (Needs more data)\n";
+          String optLines = '';
+          for (int i = 0; i < options.length && i < 3; i++) {
+            optLines += "${i + 1}. ${options[i]} [${optPcts[i]}%]\n";
           }
-          result += "🔍 Closest Trained Match:\n\"$matched\"";
+
+          result = "Best: ${gen['generated']}\n\n";
+          if (options.length > 1) {
+            result += "All Options:\n$optLines\n";
+          }
+          result += "Input Match: $inputMatch%\n";
+          result += "Output Match: $outputMatch%\n";
+          result += "Status: ${isAccurate ? 'Accurate' : 'Low Match'}\n";
+          result += "Pattern: \"$matched\"";
 
           _startTypewriter(result);
         } else {
@@ -357,7 +365,7 @@ class _PredictScreenState extends State<PredictScreen> {
         }
       } else {
         var pred = _mlEngine.predictNextWord(_inputController.text);
-        result = pred['success'] ? "Context: ${pred['context']}\n\nNext Words:\n${pred['predictions']}" : pred['message'];
+        result = pred['success'] ? "${pred['context']}\n\nNext Words:\n${pred['predictions']}" : pred['message'];
       }
 
       await _dbHelper.insertPrediction(_inputController.text, generateSentence ? _typedText : result);

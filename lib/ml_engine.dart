@@ -10,19 +10,29 @@ class MLEngine {
   final List<String> _rawTexts = [];
 
   // === PREFIX PATTERN MAP ===
-  // "w1 w2" -> {"w3": count, "w4": count, ...}
+  // "w1 w2" -> {"w3": count, "w4": count}
   final Map<String, Map<String, int>> _prefixMap = {};
 
   // === VOCABULARY ===
   final Set<String> _vocabulary = {};
 
   // === TOKENIZER ===
+  // Only keeps a-z, strips everything else
   List<String> _tokenize(String text) {
     return text
         .toLowerCase()
         .split(RegExp(r'[^a-z]+'))
         .where((w) => w.isNotEmpty)
         .toList();
+  }
+
+  // === WORD MATCH ===
+  // Exact match OR partial prefix match ("na" matches "name")
+  bool _wordMatch(String a, String b) {
+    if (a == b) return true;
+    if (a.length >= 2 && b.startsWith(a)) return true;
+    if (b.length >= 2 && a.startsWith(b)) return true;
+    return false;
   }
 
   // === TRAIN ===
@@ -60,42 +70,76 @@ class MLEngine {
     }
   }
 
-  // === PATTERN MATCH ===
-  _Match _findBestMatch(List<String> input) {
-    if (input.isEmpty || _sentences.isEmpty) {
-      return _Match(0, -1, '', []);
-    }
+  // === FIND ALL MATCHES ===
+  // Returns top sentences sorted by match quality (exact > partial > continuation length)
+  List<_Match> _findAllMatches(List<String> input, {int maxResults = 5}) {
+    if (input.isEmpty || _sentences.isEmpty) return [];
 
-    int bestLen = 0;
-    int bestIdx = -1;
+    List<_Match> results = [];
 
     for (int s = 0; s < _sentences.length; s++) {
       var sent = _sentences[s];
-      int len = 0;
+      int exactLen = 0;
+      int partialLen = 0;
       int limit = min(input.length, sent.length);
 
-      while (len < limit && input[len] == sent[len]) {
-        len++;
+      for (int i = 0; i < limit; i++) {
+        if (input[i] == sent[i]) {
+          exactLen++;
+          partialLen++;
+        } else if (_wordMatch(input[i], sent[i])) {
+          partialLen++;
+          break; // partial stops the chain
+        } else {
+          break;
+        }
       }
 
-      if (len > bestLen ||
-          (len == bestLen && len > 0 && sent.length > _sentences[bestIdx].length)) {
-        bestLen = len;
-        bestIdx = s;
-        if (bestLen == input.length) break;
+      if (partialLen > 0) {
+        List<String> continuation = exactLen < sent.length
+            ? sent.sublist(exactLen)
+            : [];
+
+        results.add(_Match(
+          exactLen: exactLen,
+          partialLen: partialLen,
+          index: s,
+          sentence: _rawTexts[s],
+          continuation: continuation,
+        ));
       }
     }
 
-    if (bestIdx < 0) return _Match(0, -1, '', []);
+    // Sort: best partial match > best exact match > longest continuation
+    results.sort((a, b) {
+      if (a.partialLen != b.partialLen) {
+        return b.partialLen.compareTo(a.partialLen);
+      }
+      if (a.exactLen != b.exactLen) {
+        return b.exactLen.compareTo(a.exactLen);
+      }
+      return b.continuation.length.compareTo(a.continuation.length);
+    });
 
-    List<String> continuation = bestLen < _sentences[bestIdx].length
-        ? _sentences[bestIdx].sublist(bestLen)
-        : [];
+    return results.take(maxResults).toList();
+  }
 
-    return _Match(bestLen, bestIdx, _rawTexts[bestIdx], continuation);
+  // Convenience: single best match
+  _Match _findBestMatch(List<String> input) {
+    var all = _findAllMatches(input, maxResults: 1);
+    return all.isNotEmpty
+        ? all.first
+        : _Match(
+      exactLen: 0,
+      partialLen: 0,
+      index: -1,
+      sentence: '',
+      continuation: [],
+    );
   }
 
   // === GET CANDIDATES ===
+  // Longest prefix first (up to 4 words), fallback to shorter
   List<MapEntry<String, int>> _getCandidates(List<String> context) {
     if (context.isEmpty) return [];
 
@@ -110,42 +154,129 @@ class MLEngine {
     return [];
   }
 
+  // === GENERATE ONE PATH ===
+  // From a match, generate one complete sentence
+  List<String> _generatePath(List<String> tokens, _Match match, int maxWords) {
+    List<String> result = List.from(tokens);
+    Set<String> usedBigrams = {};
+
+    if (match.continuation.isNotEmpty) {
+      for (var word in match.continuation) {
+        if (result.length - tokens.length >= maxWords) break;
+
+        // Avoid repeated bigrams
+        if (result.isNotEmpty) {
+          String bigram = "${result.last} $word";
+          if (usedBigrams.contains(bigram)) break;
+          usedBigrams.add(bigram);
+        }
+        result.add(word);
+      }
+    } else {
+      for (int step = 0; step < maxWords; step++) {
+        var cands = _getCandidates(result);
+        if (cands.isEmpty) break;
+
+        String chosen;
+        var sent = _sentences[match.index];
+        if (match.index >= 0 && result.length < sent.length) {
+          chosen = sent[result.length];
+        } else {
+          chosen = cands.first.key;
+        }
+
+        // Skip if same as last word
+        if (result.isNotEmpty && result.last == chosen) {
+          if (cands.length > 1) {
+            chosen = cands[1].key;
+          } else {
+            break;
+          }
+        }
+
+        // Skip if bigram already used
+        String bigram = "${result.last} $chosen";
+        if (usedBigrams.contains(bigram)) {
+          bool foundAlt = false;
+          for (var c in cands) {
+            String altBigram = "${result.last} ${c.key}";
+            if (!usedBigrams.contains(altBigram) && c.key != result.last) {
+              chosen = c.key;
+              foundAlt = true;
+              break;
+            }
+          }
+          if (!foundAlt) break;
+        }
+
+        usedBigrams.add("${result.last} $chosen");
+        result.add(chosen);
+      }
+    }
+
+    return result;
+  }
+
   // === PUBLIC API ===
 
   int get vocabularySize => _vocabulary.length;
   int get totalBigramTypes => _prefixMap.length;
 
+  // Live suggestions — also handles partial last word
   List<String> getLiveSuggestions(String query) {
     var tokens = _tokenize(query);
     if (tokens.isEmpty) return [];
 
     var cands = _getCandidates(tokens);
+
+    // If nothing found, the last token might be a partial word
+    // Try getting candidates without it, then filter by prefix
+    if (cands.isEmpty && tokens.length > 1 && tokens.last.length >= 2) {
+      String partial = tokens.last;
+      cands = _getCandidates(tokens.sublist(0, tokens.length - 1));
+      cands = cands.where((e) => e.key.startsWith(partial)).toList();
+    }
+
     return cands.take(3).map((e) => e.key).toList();
   }
 
+  // Predict next word with pattern match %
   Map<String, dynamic> predictNextWord(String query) {
     var tokens = _tokenize(query);
-    if (tokens.isEmpty) return {'success': false, 'message': 'Type some words.'};
+    if (tokens.isEmpty) {
+      return {'success': false, 'message': 'Type some words.'};
+    }
 
     var match = _findBestMatch(tokens);
     double matchPct =
-    tokens.isNotEmpty ? (match.length / tokens.length) * 100 : 0;
+    tokens.isNotEmpty ? (match.partialLen / tokens.length) * 100 : 0;
 
     var cands = _getCandidates(tokens);
+
+    // Partial last word fallback
+    if (cands.isEmpty && tokens.length > 1 && tokens.last.length >= 2) {
+      String partial = tokens.last;
+      cands = _getCandidates(tokens.sublist(0, tokens.length - 1));
+      cands = cands.where((e) => e.key.startsWith(partial)).toList();
+    }
+
     if (cands.isEmpty) {
       return {
         'success': false,
-        'message': 'No patterns found. Train more sentences.'
+        'message': 'No patterns found. Train more sentences.',
       };
     }
 
     var top3 = cands.take(3).toList();
     int total = top3.fold(0, (sum, e) => sum + e.value);
 
+    // If partial match on last word, boost candidates that complete it
+    String matchType = match.partialLen == match.exactLen ? '' : ' (partial)';
+
     return {
       'success': true,
       'context':
-      "Pattern Match: ${matchPct.toStringAsFixed(0)}% | \"${match.sentence}\"",
+      "Pattern Match: ${matchPct.toStringAsFixed(0)}%$matchType | \"${match.sentence}\"",
       'predictions': top3
           .map((e) =>
       "  -> ${e.key}  [${((e.value / total) * 100).toStringAsFixed(1)}%]")
@@ -154,6 +285,7 @@ class MLEngine {
     };
   }
 
+  // Generate sentence — returns up to 3 options with match %
   Map<String, dynamic> generateSentence(String query, int maxWords,
       {double threshold = 0.80}) {
     var tokens = _tokenize(query);
@@ -161,68 +293,106 @@ class MLEngine {
       return {'success': false, 'message': 'Type some words to generate.'};
     }
 
-    List<String> result = List.from(tokens);
+    // Find all matching sentences (up to 3)
+    var matches = _findAllMatches(tokens, maxResults: 3);
 
-    var match = _findBestMatch(tokens);
-    double inputMatchPct =
-    tokens.isNotEmpty ? (match.length / tokens.length) * 100 : 0;
+    // Generate one path per match
+    List<String> options = [];
+    List<double> pcts = [];
+    String bestPattern = '';
 
-    if (match.index >= 0 && match.continuation.isNotEmpty) {
-      for (var word in match.continuation) {
-        if (result.length - tokens.length >= maxWords) break;
-        result.add(word);
-      }
-    } else if (match.index >= 0) {
-      for (int step = 0; step < maxWords; step++) {
-        var cands = _getCandidates(result);
-        if (cands.isEmpty) break;
+    for (var match in matches) {
+      List<String> result = _generatePath(tokens, match, maxWords);
 
-        var sent = _sentences[match.index];
-        String chosen;
+      double inputPct =
+      tokens.isNotEmpty ? (match.partialLen / tokens.length) * 100 : 0;
 
-        if (result.length < sent.length) {
-          chosen = sent[result.length];
-        } else {
-          chosen = cands.first.key;
-        }
+      String text = result.join(' ');
 
-        if (result.isNotEmpty && result.last == chosen) break;
-        result.add(chosen);
-      }
-    } else {
+      // Skip duplicate options
+      if (options.contains(text)) continue;
+
+      options.add(text);
+      pcts.add(inputPct);
+      if (bestPattern.isEmpty) bestPattern = match.sentence;
+    }
+
+    // Fallback: no matches at all, generate from prefix map
+    if (options.isEmpty) {
+      List<String> result = List.from(tokens);
+      Set<String> usedBigrams = {};
+
       for (int step = 0; step < maxWords; step++) {
         var cands = _getCandidates(result);
         if (cands.isEmpty) break;
 
         String chosen = cands.first.key;
+        if (result.isNotEmpty && result.last == chosen) {
+          if (cands.length > 1) {
+            chosen = cands[1].key;
+          } else {
+            break;
+          }
+        }
 
-        if (result.isNotEmpty && result.last == chosen) break;
+        String bigram = "${result.last} $chosen";
+        if (usedBigrams.contains(bigram)) {
+          bool foundAlt = false;
+          for (var c in cands) {
+            if (!usedBigrams.contains("${result.last} ${c.key}") &&
+                c.key != result.last) {
+              chosen = c.key;
+              foundAlt = true;
+              break;
+            }
+          }
+          if (!foundAlt) break;
+        }
+
+        usedBigrams.add("${result.last} $chosen");
         result.add(chosen);
       }
+
+      options.add(result.join(' '));
+      pcts.add(0);
     }
 
-    String generatedText = result.join(' ');
+    // Best option is always first
+    String best = options.first;
+    double bestPct = pcts.first;
 
-    var finalMatch = _findBestMatch(result);
-    double outputMatchPct =
-    result.isNotEmpty ? (finalMatch.length / result.length) * 100 : 0;
+    // Output match: how much of the full generated text matches a trained sentence
+    var bestTokens = best.split(' ');
+    var outputMatch = _findBestMatch(bestTokens);
+    double outputPct =
+    bestTokens.isNotEmpty ? (outputMatch.partialLen / bestTokens.length) * 100 : 0;
 
     return {
       'success': true,
-      'generated': generatedText,
-      'confidence': inputMatchPct.toStringAsFixed(1),
-      'output_match': outputMatchPct.toStringAsFixed(1),
-      'matched_text': match.sentence,
-      'is_accurate': inputMatchPct >= (threshold * 100),
+      'generated': best,
+      'confidence': bestPct.toStringAsFixed(1),
+      'output_match': outputPct.toStringAsFixed(1),
+      'matched_text': bestPattern,
+      'is_accurate': bestPct >= (threshold * 100),
+      'options': options,
+      'options_match': pcts.map((p) => p.toStringAsFixed(0)).toList(),
     };
   }
 }
 
+// Helper: pattern match result
 class _Match {
-  final int length;
-  final int index;
-  final String sentence;
-  final List<String> continuation;
+  final int exactLen; // Fully matching leading words
+  final int partialLen; // Exact + partial prefix matches
+  final int index; // Sentence index (-1 if none)
+  final String sentence; // Raw text
+  final List<String> continuation; // Words after the match point
 
-  _Match(this.length, this.index, this.sentence, this.continuation);
+  _Match({
+    required this.exactLen,
+    required this.partialLen,
+    required this.index,
+    required this.sentence,
+    required this.continuation,
+  });
 }
